@@ -37,7 +37,25 @@ Update the path to point to the location of ```encoders.py``` in your conda envi
 
 
 # Run script
+To get started, run:
+```bash
+python start.py
+```
+
+You'll then see usage information similar to:
+
+```text
+Usage: python start.py [train|test] [options]
+
+Training options:
+  --runs-per-network R    Number of runs per network (default: 5)
+  --env ID                Run identifier (default: Normal) [defines type of environment]
+  --network N1,N2,N3     Comma-separated list of networks to train
+                         (default choices: ['fully_connected', 'nature_cnn', 'simple', 'resnet'])
+```
+
 ## Training
+Example command for training:
 ```bash
 python start.py train --runs-per-network 1 --env Normal --network neurips,simple,fully_connected
 ```
@@ -45,9 +63,13 @@ python start.py train --runs-per-network 1 --env Normal --network neurips,simple
 - If the issue persists, stop the current training episode and train again
 
 ## Evaluating
-TODO
+Example command for evaluation:
+```bash
+python start.py test --runs-per-network 1 --env Normal --network neurips,simple,fully_connected
+```
 
+# Customize the model
+- To change architecture: Add your model to the `/mouse_vs_ai_windows/Encoders` folder
+- To change hyperparamters: edit information in `/mouse_vs_ai_windows/Encoders/nature.yaml` file
 
-
-
-
+Then run the above python training script.
