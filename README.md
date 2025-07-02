@@ -14,8 +14,15 @@ start /wait "" Miniconda3-latest-Windows-x86_64.exe /InstallationType=JustMe /Ad
 To activate conda, do: ```%USERPROFILE%\Miniconda3\Scripts\activate```
 
 # Create conda environment
-```cd``` into your working directory
+Open command prompt and navigate to the directory where you want to download the project.
 
+Clone the repository from GitHub:
+```bash
+git clone https://github.com/robustforaging/mouse_vs_ai_windows.git
+cd mouse_vs_ai_windows
+```
+
+Then, create and activate the conda environment:
 ```bash
 conda env create -n mouse -f mouse.yml
 conda activate mouse
