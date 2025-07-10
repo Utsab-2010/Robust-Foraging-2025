@@ -3,7 +3,7 @@
 Welcome to **Mouse vs. AI: Robust Visual Foraging Challenge @ NeurIPS 2025**
 
 This is a training guide for **Windows**. For other operating systems, please check:
-[Linux](https://github.com/robustforaging/mouse_vs_ai_linux) and [macOS](https://github.com/robustforaging/mouse_vs_ai_macOS?tab=readme-ov-file#macos-training-guide)
+[Linux](https://github.com/robustforaging/mouse_vs_ai_linux) and [MacOS](https://github.com/robustforaging/mouse_vs_ai_macOS?tab=readme-ov-file#macos-training-guide)
 
 # Install conda
 Open command prompt
@@ -58,6 +58,16 @@ python train --runs-per-network 1 --env Normal --network neurips,simple,fully_co
 - If the issue persists, stop the current training episode and train again
 
 ## Evaluating
+```text
+Usage: python evaluate.py [options]
+
+Evaluation options:
+  --model      Path to the trained ONNX model file
+  --episodes   Number of episodes to run in inference(default: 50)
+  --env        Build folder name under ./Builds/
+  --log-name   Base name for the output log file
+```
+
 Example command for evaluation:
 ```bash
 python start.py test --runs-per-network 1 --env Normal --network neurips,simple,fully_connected
