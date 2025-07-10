@@ -37,15 +37,11 @@ Update the path to point to the location of ```encoders.py``` in your conda envi
 
 
 # Run script
-To get started, run:
-```bash
-python start.py
-```
 
-You'll then see usage information similar to:
 
+## Training
 ```text
-Usage: python start.py [train|test] [options]
+Usage: python train.py [options]
 
 Training options:
   --runs-per-network R    Number of runs per network (default: 5)
@@ -54,10 +50,9 @@ Training options:
                          (default choices: ['fully_connected', 'nature_cnn', 'simple', 'resnet'])
 ```
 
-## Training
 Example command for training:
 ```bash
-python start.py train --runs-per-network 1 --env Normal --network neurips,simple,fully_connected
+python train --runs-per-network 1 --env Normal --network neurips,simple,fully_connected
 ```
 - Troubleshooting: If training only proceeds after pressing ```ENTER```, try running the command with unbuffered output mode:  ```python -u start.py train --runs-per-network 1 --env Normal --network neurips,simple,fully_connected``` 
 - If the issue persists, stop the current training episode and train again
