@@ -85,4 +85,3 @@ python evaluate.py --model "/path/to/your_model.onnx" --log-name "example.txt" -
   - 📝 Note: Please do not change the name of this file or the parameter `vis_encode_type` in this file. Only modify other configuration values as needed.
 
 After making your changes, run the Python training script as described above.
-
