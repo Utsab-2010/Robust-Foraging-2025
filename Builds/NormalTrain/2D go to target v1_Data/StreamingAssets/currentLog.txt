@@ -1,0 +1,1 @@
+fully_connected_NormalTrain_4_train.txt

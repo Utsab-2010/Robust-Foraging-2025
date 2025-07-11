@@ -1,1 +1,1 @@
-simple_RandomTrain_2_train.txt
+fully_connected_RandomTrain_2_train.txt
