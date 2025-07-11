@@ -52,7 +52,7 @@ Training options:
 
 Example command for training:
 ```bash
-python train --runs-per-network 1 --env Normal --network neurips,simple,fully_connected
+python train.py --env RandomTrain --network neurips,simple,fully_connected
 ```
 - Troubleshooting: If training only proceeds after pressing ```ENTER```, try running the command with unbuffered output mode:  ```python -u start.py train --runs-per-network 1 --env Normal --network neurips,simple,fully_connected``` 
 - If the issue persists, stop the current training episode and train again
@@ -70,7 +70,7 @@ Evaluation options:
 
 Example command for evaluation:
 ```bash
-python start.py test --runs-per-network 1 --env Normal --network neurips,simple,fully_connected
+python evaluate.py --model="./example_model.onnx" --episodes=200
 ```
 
 # Customize the model
