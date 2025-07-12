@@ -44,7 +44,7 @@ Usage: python train.py [options]
 
 Training options:
   --runs-per-network R    Number of runs per network (default: 5)
-  --env ID                Run identifier (default: Normal) [defines type of environment]
+  --env ID                Run identifier (default: NormalTrain) [defines type of environment]
   --network N1,N2,N3      Comma-separated list of networks to train
                           (default choices: ['fully_connected', 
                           'nature_cnn', 'simple', 'resnet'])
@@ -54,7 +54,7 @@ Training options:
 
 Example command for training:
 ```bash
-python train --runs-per-network 1 --env Normal --network MyNetwork1
+python train --runs-per-network 1 --env NormalTrain --network MyNetwork1
 ```
 - Troubleshooting: If training only proceeds after pressing ```ENTER```, try running the command with unbuffered output mode:  ```python -u train.py [options]``` 
 - If the issue persists, stop the current training episode and train again
