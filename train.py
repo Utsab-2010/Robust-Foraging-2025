@@ -80,7 +80,7 @@ def summarize_log(log_path: str):
         print(f"Overall success rate: {overall:.1f}% ({sum(successes)}/{len(successes)})")
         for ttype, hits in by_type.items():
             rate = sum(hits)/len(hits)*100
-            print(f"  • Trial type {ttype}: {rate:.1f}% ({sum(hits)}/{len(hits)})")
+            print(f"  * Trial type {ttype}: {rate:.1f}% ({sum(hits)}/{len(hits)})")
     if distances:
         print(f"Max target distance reached: {max(distances):.3f}/5.00")
     print("==========================\n")
