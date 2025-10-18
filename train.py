@@ -131,7 +131,8 @@ def train_multiple_networks(networks, env_path, runs_per_network=2, log_name=Non
         else:
             config_path = "./Config/nature.yaml"
             if network != "nature_cnn":
-                replace.replace_nature_visual_encoder("C:/Users/mariu/Miniconda3/envs/mouse2/Lib/site-packages/mlagents/trainers/torch/encoders.py", "./Encoders/" + network + ".py")
+                print(f"Warning: Unrecognized network '{network}', defaulting to nature_cnn")
+                replace.replace_nature_visual_encoder("D:/miniconda/envs/mouse/Lib/site-packages/mlagents/trainers/torch/encoders.py", "./Encoders/" + network + ".py")
 
         run_ids = train_solo(
             run_id=f"{network}_{env}",

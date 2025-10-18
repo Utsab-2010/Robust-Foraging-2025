@@ -15,7 +15,7 @@ def replace_nature_visual_encoder(encoder_file_path, custom_encoder_file_path):
         with open(encoder_file_path, 'r') as f:
             encoder_code = f.read()
     except FileNotFoundError:
-        print(f"Error: encoder.py not found at {encoder_file_path}")
+        print(f"Error: encoders.py not found at {encoder_file_path}")
         return
 
     try:

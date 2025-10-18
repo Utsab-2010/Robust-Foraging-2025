@@ -1,1 +1,1 @@
-fully_connected_RandomTrain_2_train.txt
+transcoder2_RandomTrain_3_train.txt

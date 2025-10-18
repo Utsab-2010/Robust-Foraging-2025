@@ -1,1 +1,1 @@
-fully_connected_NormalTrain_4_train.txt
+trans_v4_NormalTrain_17_train.txt
