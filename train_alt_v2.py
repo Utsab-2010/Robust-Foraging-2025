@@ -102,9 +102,9 @@ def summarize_log(log_path: str):
         print(f"Error reading log file {log_path}: {e}")
 
 # ─── Checkpoint management functions ────────────────────────────────────────────────
-def find_latest_checkpoint(run_id, session_dir):
-    """Find the latest checkpoint for a given run_id within a session directory."""
-    results_dir = session_dir / run_id
+def find_latest_checkpoint(run_id, results_base_dir):
+    """Find the latest checkpoint for a given run_id within results directory."""
+    results_dir = results_base_dir / run_id
     
     if not results_dir.exists():
         print(f"   🔍 No results directory found: {results_dir}")
@@ -140,19 +140,21 @@ def find_latest_checkpoint(run_id, session_dir):
     print(f"   🔍 Found latest checkpoint: {latest_checkpoint}")
     return latest_checkpoint
 
-def cleanup_session_data(session_dir):
-    """Comprehensive cleanup of ML-Agents session data."""
+def cleanup_session_data(session_name):
+    """Cleanup ML-Agents run data for a session."""
     import shutil
     
-    if session_dir.exists():
-        print(f"   🧹 Removing session directory: {session_dir}")
+    # Clean session directory
+    session_results_dir = Path("./results") / session_name
+    if session_results_dir.exists():
+        print(f"   🧹 Removing session directory: {session_results_dir}")
         try:
-            shutil.rmtree(session_dir)
+            shutil.rmtree(session_results_dir)
         except Exception as e:
-            print(f"   ⚠️  Could not remove {session_dir}: {e}")
+            print(f"   ⚠️  Could not remove {session_results_dir}: {e}")
     
     # Clean any tensorboard logs (summaries directory)
-    summaries_session_dir = Path("./summaries") / session_dir.name
+    summaries_session_dir = Path("./summaries") / session_name
     if summaries_session_dir.exists():
         print(f"   🧹 Removing summaries directory: {summaries_session_dir}")
         try:
@@ -161,33 +163,32 @@ def cleanup_session_data(session_dir):
             print(f"   ⚠️  Could not remove {summaries_session_dir}: {e}")
 
 # ─── Main alternating training function ────────────────────────────────────────────────
-def train_alternating_v2(network_name, total_runs, config_path, clean_start=False):
+def train_alternating_v2(network_name, total_runs, config_path, clean_start=False, use_gpu=False):
     """
     Train alternating between NormalTrain and FogTrain environments.
     Each run builds upon the previous one using checkpoints.
     All runs are organized under a session directory.
     """
-    # Create session-based directory structure
+    # Create session-based naming (but use default ML-Agents structure)
     session_number = get_next_session_number(network_name)
     session_name = f"{network_name}_AltTrain_{session_number}"
-    session_dir = Path("./results") / session_name
     
     print(f"🔄 ALTERNATING TRAINING V2 SESSION: {session_name}")
     print(f"   Network: {network_name}")
-    print(f"   Session Directory: {session_dir}")
+    print(f"   Session Run ID: {session_name}")
     print(f"   Total runs: {total_runs}")
     print(f"   Will alternate: NormalTrain ↔ FogTrain")
     print(f"   Model continuity: Each run loads from previous checkpoint")
+    if use_gpu:
+        print(f"   🚀 GPU acceleration: ENABLED")
+    else:
+        print(f"   💻 GPU acceleration: DISABLED (CPU only)")
     
     # Handle clean start
     if clean_start:
         print(f"   🧹 Clean start requested")
-        cleanup_session_data(session_dir)
+        cleanup_session_data(session_name)
         time.sleep(2)
-    
-    # Create session directory
-    session_dir.mkdir(parents=True, exist_ok=True)
-    print(f"   📁 Created session directory: {session_dir}")
     
     # Replace encoder if it's a custom network
     if network_name not in ["nature_cnn", "simple", "resnet", "fully_connected"]:
@@ -208,15 +209,17 @@ def train_alternating_v2(network_name, total_runs, config_path, clean_start=Fals
             env_name = "FogTrain"
             env_path = f"./Builds/FogTrain"
         
-        current_run_id = f"{session_name}_run{run_num}"
+        # Create unique run ID for each environment to avoid conflicts
+        current_run_id = f"run{run_num}_{env_name}"
+        session_results_dir = f"./results/{session_name}"
         
         print(f"\n🎯 === RUN {run_num}/{total_runs} ===")
         print(f"   Environment: {env_name}")
-        print(f"   Run ID: {current_run_id}")
-        print(f"   Results will be saved to: {session_dir / current_run_id}")
+        print(f"   Current Run ID: {current_run_id}")
+        print(f"   Results will be saved to: {session_results_dir}/{current_run_id}")
         
         # Set up logging
-        log_filename = f"{current_run_id}_{env_name}_train.txt"
+        log_filename = f"{session_name}_{current_run_id}_train.txt"
         log_path = os.path.join(env_path, "2D go to target v1_Data", "StreamingAssets", "currentLog.txt")
         
         with open(log_path, "w") as f:
@@ -224,43 +227,57 @@ def train_alternating_v2(network_name, total_runs, config_path, clean_start=Fals
         
         time.sleep(1)
         
-        # Build base command with custom results directory
+        # Build base command using custom results directory
         cmd = [
             "mlagents-learn",
             config_path,
             "--env", str(Path(env_path) / "2D go to target v1.exe"),
-            "--run-id", current_run_id,
-            "--results-dir", str(session_dir),  # Use session directory as results dir
+            "--run-id", current_run_id,  # Unique run ID for each environment
+            "--results-dir", session_results_dir,  # Session-specific results directory
             "--env-args", "--screen-width=155", "--screen-height=86",
+            "--force"  # Always use force to overwrite any existing data
         ]
         
-        # Handle model continuity
+        # Add GPU support if requested
+        if use_gpu:
+            cmd.extend(["--torch-device", "cuda"])
+            print(f"   🚀 Using GPU (CUDA) for training")
+        
+        # Handle model continuity using --initialize-from
         if run_num == 1:
             # First run - start fresh
             print(f"   🆕 First run - starting fresh")
-            cmd.append("--force")
         else:
-            # Subsequent runs - try to resume from previous run
-            prev_run_id = f"{session_name}_run{run_num - 1}"
-            checkpoint = find_latest_checkpoint(prev_run_id, session_dir)
+            # Subsequent runs - initialize from previous run
+            previous_run_num = run_num - 1
+            previous_env_name = "FogTrain" if previous_run_num % 2 == 0 else "NormalTrain"
+            previous_run_id = f"run{previous_run_num}_{previous_env_name}"
             
-            if checkpoint:
-                print(f"   📁 Continuing from previous run: {prev_run_id}")
-                print(f"   📄 Checkpoint: {checkpoint}")
-                # Use --initialize-from to load from previous run
-                cmd.extend(["--initialize-from", prev_run_id])
+            # Check if previous run exists in session directory
+            session_results_path = Path(session_results_dir)
+            previous_checkpoint = find_latest_checkpoint(previous_run_id, session_results_path)
+            
+            if previous_checkpoint:
+                print(f"   🔄 Initializing from previous run: {previous_run_id}")
+                cmd.extend(["--initialize-from", previous_run_id])
             else:
-                print(f"   ⚠️  No checkpoint found for {prev_run_id}, starting fresh")
-                cmd.append("--force")
+                print(f"   ⚠️  No checkpoint found for previous run {previous_run_id}, starting fresh")
         
         print(f"   🚀 Command: {' '.join(cmd)}")
         
         # Execute training
         try:
+            # Save the exact command used for debugging
+            try:
+                with open("last_mlagents_command.txt", "w", encoding="utf-8") as cf:
+                    cf.write(" ".join(cmd))
+            except Exception as _:
+                pass
+
             print(f"   ▶️  Starting training...")
             subprocess.run(cmd, check=True)
             print(f"   ✅ Completed run {run_num}: {current_run_id} ({env_name})")
-            run_results.append((current_run_id, env_name))
+            run_results.append((f"{session_name}_{current_run_id}", env_name))
             
             # Brief pause between runs
             time.sleep(3)
@@ -271,7 +288,7 @@ def train_alternating_v2(network_name, total_runs, config_path, clean_start=Fals
             print(f"      • Try: python train_alt_v2.py --network {network_name} --runs {total_runs} --clean-start")
             print(f"      • Check if Unity executable is accessible")
             print(f"      • Verify config file: {config_path}")
-            print(f"      • Session directory: {session_dir}")
+            print(f"      • Check results directory: ./results/{current_run_id}")
             break
     
     return run_results, session_name
@@ -317,6 +334,8 @@ Examples:
                         help="Remove existing run data before starting")
     parser.add_argument("--no-summary", action="store_true",
                         help="Skip log file summaries at the end")
+    parser.add_argument("--gpu", action="store_true",
+                        help="Use GPU (CUDA) for training acceleration")
     
     args = parser.parse_args()
     
@@ -334,13 +353,29 @@ Examples:
     print(f"   Pattern: Odd runs → NormalTrain, Even runs → FogTrain")
     if args.clean_start:
         print(f"   🧹 Clean start: Will remove existing data")
+    if args.gpu:
+        print(f"   🚀 GPU acceleration: ENABLED")
+        # Check if CUDA is available
+        try:
+            import torch
+            if torch.cuda.is_available():
+                gpu_name = torch.cuda.get_device_name(0)
+                print(f"   📱 GPU detected: {gpu_name}")
+            else:
+                print(f"   ⚠️  GPU requested but CUDA not available - will use CPU")
+                args.gpu = False  # Disable GPU if not available
+        except ImportError:
+            print(f"   ⚠️  PyTorch not available for GPU detection")
+    else:
+        print(f"   💻 GPU acceleration: DISABLED (CPU only)")
     
     # Execute training
     run_results, session_name = train_alternating_v2(
         network_name=args.network,
         total_runs=args.runs,
         config_path=config_path,
-        clean_start=args.clean_start
+        clean_start=args.clean_start,
+        use_gpu=args.gpu
     )
     
     # Summarize results
@@ -353,7 +388,7 @@ Examples:
         logs_dir.mkdir(exist_ok=True)
         
         for run_id, env_name in run_results:
-            log_file = logs_dir / f"{run_id}_{env_name}_train.txt"
+            log_file = logs_dir / f"{run_id}_train.txt"
             print(f"\n=== Summary for {run_id} ({env_name}) ===")
             summarize_log(str(log_file))
     
