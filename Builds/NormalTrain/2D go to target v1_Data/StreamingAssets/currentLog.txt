@@ -1,1 +1,1 @@
-trans_v4_AlternateTrain_1_train.txt
+trans_v6_AltTrain_1_train.txt

@@ -13,8 +13,10 @@ class NatureVisualEncoder(nn.Module):
         self.patch_size = 32
         self.width = width
         
-        # Calculate split dimensions
-        self.half_width = width // 2  # Split at middle: left and right halves
+        # Calculate split dimensions - each part extends to 1.4x half width for overlap
+        self.half_width = width // 2
+        self.left_width = int(self.half_width * 1.4)   # Left extends to 1.4x half width
+        self.right_start = width - int(self.half_width * 1.4)  # Right starts earlier for 1.4x coverage
         
         # Left half feature extractor (reduced parameters for half-width processing)
         self.left_feature_extractor = nn.Sequential(
@@ -50,10 +52,10 @@ class NatureVisualEncoder(nn.Module):
             bias=False
         )
         
-        # Calculate dimensions for each half
+        # Calculate dimensions for each extended part
         patch_h = height // self.patch_size
-        left_patch_w = self.half_width // self.patch_size
-        right_patch_w = (width - self.half_width) // self.patch_size
+        left_patch_w = self.left_width // self.patch_size  # Left part extends to 1.4x half width
+        right_patch_w = (width - self.right_start) // self.patch_size  # Right part from start to end
         
         self.left_flat = self.embed_size * patch_h * left_patch_w
         self.right_flat = self.embed_size * patch_h * right_patch_w
@@ -64,7 +66,7 @@ class NatureVisualEncoder(nn.Module):
             nn.Linear(self.combined_flat, self.combined_flat // 4),  # More aggressive reduction
             nn.LeakyReLU(),
             nn.Linear(self.combined_flat // 4, self.h_size),         # Direct to output size
-            nn.Tanh()
+            nn.LeakyReLU()
         )
         
         # # Final dense layer
@@ -77,18 +79,18 @@ class NatureVisualEncoder(nn.Module):
         if not exporting_to_onnx.is_exporting():
             visual_obs = visual_obs.permute([0, 3, 1, 2])
 
-        # Split input into left and right halves
+        # Split input into overlapping left and right parts (1.4x half width each)
         # visual_obs shape: (batch, channels, height, width)
-        left_half = visual_obs[:, :, :, :self.half_width]      # Left half: [:, :, :, :width//2]
-        right_half = visual_obs[:, :, :, self.half_width:]     # Right half: [:, :, :, width//2:]
+        left_part = visual_obs[:, :, :, :self.left_width]           # Left part: extends to 1.4x half width
+        right_part = visual_obs[:, :, :, self.right_start:]         # Right part: starts earlier for 1.4x coverage
         
-        # Process left half
-        left_features = self.left_feature_extractor(left_half)
+        # Process left part (1.4x half width)
+        left_features = self.left_feature_extractor(left_part)
         left_patches = self.left_patch_embeddings(left_features)
         left_flat = left_patches.reshape([-1, self.left_flat])
         
-        # Process right half  
-        right_features = self.right_feature_extractor(right_half)
+        # Process right part (1.4x half width)
+        right_features = self.right_feature_extractor(right_part)
         right_patches = self.right_patch_embeddings(right_features)
         right_flat = right_patches.reshape([-1, self.right_flat])
         
