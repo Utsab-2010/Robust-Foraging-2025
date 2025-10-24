@@ -235,7 +235,8 @@ def train_alternating_v2(network_name, total_runs, config_path, clean_start=Fals
             "--run-id", current_run_id,  # Unique run ID for each environment
             "--results-dir", session_results_dir,  # Session-specific results directory
             "--env-args", "--screen-width=155", "--screen-height=86",
-            "--force"  # Always use force to overwrite any existing data
+            # Do not include --force here unconditionally; it can delete previous run data
+            # which would remove checkpoints we may want to initialize from.
         ]
         
         # Add GPU support if requested
@@ -247,6 +248,9 @@ def train_alternating_v2(network_name, total_runs, config_path, clean_start=Fals
         if run_num == 1:
             # First run - start fresh
             print(f"   🆕 First run - starting fresh")
+            # If user requested a clean start, allow force to overwrite existing results
+            if clean_start:
+                cmd.append("--force")
         else:
             # Subsequent runs - initialize from previous run
             previous_run_num = run_num - 1
@@ -262,6 +266,10 @@ def train_alternating_v2(network_name, total_runs, config_path, clean_start=Fals
                 cmd.extend(["--initialize-from", previous_run_id])
             else:
                 print(f"   ⚠️  No checkpoint found for previous run {previous_run_id}, starting fresh")
+                # If no previous checkpoint but clean_start requested, allow force to clear old data
+                if clean_start and run_num == 2:
+                    # If the user asked for a clean start, ensure we pass --force for the subsequent run as well
+                    cmd.append("--force")
         
         print(f"   🚀 Command: {' '.join(cmd)}")
         
