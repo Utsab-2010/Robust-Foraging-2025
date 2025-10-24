@@ -56,6 +56,8 @@ Training options:
 Example command for training:
 ```bash
 python train.py --runs-per-network 1 --env NormalTrain --network MyNetwork1
+
+python train_alt_v2.py --network trans_v5 --runs 4 --gpu
 ```
 - Troubleshooting: If training only proceeds after pressing ```ENTER```, try running the command with unbuffered output mode:  ```python -u train.py [options]``` 
 - If the issue persists, stop the current training episode and train again
