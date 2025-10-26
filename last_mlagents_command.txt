@@ -1,1 +1,1 @@
-mlagents-learn ./Config/nature.yaml --env Builds\FogTrain\2D go to target v1.exe --run-id run2_FogTrain --results-dir ./results/trans_v5_AltTrain_8 --env-args --screen-width=155 --screen-height=86 --initialize-from run1_NormalTrain
+mlagents-learn ./Config/nature.yaml --env Builds\NormalTrain\2D go to target v1.exe --run-id run1_NormalTrain --results-dir ./results/trans_v5_AltTrain_9 --env-args --screen-width=155 --screen-height=86 --force --torch-device cuda
