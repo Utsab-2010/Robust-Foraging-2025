@@ -1,8 +1,20 @@
 class NatureVisualEncoder(nn.Module):
     def __init__(self, height: int, width: int, initial_channels: int, output_size: int):
         super().__init__()
+        
         self.h_size = output_size
         weights_path = "D:\mouse_vs_ai_windows\dinov2_vits14_reg4_pretrain.pth"
+        
+        # Add channel mapping layer for grayscale to RGB
+        self.channel_map = nn.Conv2d(
+            in_channels=1, 
+            out_channels=3, 
+            kernel_size=1,
+            bias=False
+        )
+        # Initialize to equal weights to maintain the grayscale information
+        self.channel_map.weight.data.fill_(1/3)
+        
         # Create DINOv2 backbone
         self.backbone = timm.create_model(
             'vit_small_patch14_dinov2.lvd142m',
@@ -53,9 +65,18 @@ class NatureVisualEncoder(nn.Module):
         # Handle ONNX export format
         if not exporting_to_onnx.is_exporting():
             visual_obs = visual_obs.permute([0, 3, 1, 2])
-        print("Forward pass through DINO encoder")
-        # Normalize input
-        visual_obs = (visual_obs - self.mean) / self.std
+            
+        # Convert grayscale to RGB using 1x1 convolution
+        if visual_obs.shape[1] == 1:
+            visual_obs = self.channel_map(visual_obs)
+            
+        # Resize input to 518x518 (DINOv2's expected size)
+        visual_obs = torch.nn.functional.interpolate(
+            visual_obs, 
+            size=(518, 518), 
+            mode='bilinear', 
+            align_corners=False
+        )
         
         # Get features from backbone
         features = self.backbone(visual_obs)

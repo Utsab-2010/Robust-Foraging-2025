@@ -1,1 +1,1 @@
-neurips_RandomTrain_6_train.txt
+dino_RandomTrain_4_train.txt
