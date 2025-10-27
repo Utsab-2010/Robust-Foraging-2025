@@ -6,7 +6,7 @@ class NatureVisualEncoder(nn.Module):
         conv_2_hw = conv_output_shape(conv_1_hw, 4, 2)
         conv_3_hw = conv_output_shape(conv_2_hw, 3, 1)
         self.final_flat = conv_3_hw[0] * conv_3_hw[1] * 32
-
+        # print(f"Final flat size: {self.final_flat}")
         self.conv_layers = nn.Sequential(
             nn.Conv2d(initial_channels, 64, [6, 6], [3, 3]),
             nn.LeakyReLU(),
@@ -24,10 +24,12 @@ class NatureVisualEncoder(nn.Module):
             ),
             nn.LeakyReLU(),
         )
+        print(f"NatureVisualEncoder initialized with final_flat: {self.final_flat}")
         
     def forward(self, visual_obs: torch.Tensor) -> torch.Tensor:
         if not exporting_to_onnx.is_exporting():
             visual_obs = visual_obs.permute([0, 3, 1, 2])
         hidden = self.conv_layers(visual_obs)
+        print(f"Shape after conv layers: {hidden.shape}")
         hidden = hidden.reshape([-1, self.final_flat])
         return self.dense(hidden)
