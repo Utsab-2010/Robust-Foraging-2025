@@ -1,1 +1,1 @@
-dino_RandomTrain_4_train.txt
+trans_v7_RandomTrain_2_train.txt

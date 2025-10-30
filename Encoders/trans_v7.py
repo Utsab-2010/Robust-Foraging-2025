@@ -1,70 +1,63 @@
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from mlagents.torch_utils.globals import exporting_to_onnx
+
 class NatureVisualEncoder(nn.Module):
     def __init__(self, height: int, width: int, initial_channels: int, output_size: int):
         super().__init__()
         self.h_size = output_size
-        self.embed_size = 64
-        self.head_size = 64
-        self.patch_size = 16  # Smaller patches for better compatibility
+        self.initial_channels = initial_channels
         
-        # Calculate dimensions (matching neurips pattern)
-        patch_h = height // self.patch_size  # 86 // 16 = 5
-        patch_w = width // self.patch_size   # 155 // 16 = 9
-        self.num_patches = patch_h * patch_w  # 45 patches
-        self.final_flat = self.embed_size * patch_h * patch_w  # 64 * 5 * 9 = 2880
+        # Calculate output dimensions like neurips.py
+        conv_1_hw = self.conv_output_shape((height, width), 4, 2)
+        conv_2_hw = self.conv_output_shape(conv_1_hw, 3, 2)
+        conv_3_hw = self.conv_output_shape(conv_2_hw, 3, 1)
+        self.final_flat = conv_3_hw[0] * conv_3_hw[1] * 32
         
-        # Patch embedding (Conv2d with stride = patch_size)
-        self.patch_embeddings = nn.Conv2d(
-            initial_channels, self.embed_size,
-            kernel_size=self.patch_size, stride=self.patch_size, bias=False
+        # Simple edge detection (fixed Sobel, no learnable params)
+        sobel_x = torch.tensor([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]], dtype=torch.float32)
+        sobel_y = torch.tensor([[-1, -2, -1], [0, 0, 0], [1, 2, 1]], dtype=torch.float32)
+        self.register_buffer('sobel_x', sobel_x.view(1, 1, 3, 3))
+        self.register_buffer('sobel_y', sobel_y.view(1, 1, 3, 3))
+        
+        # Simple conv layers like neurips.py but with edge features
+        self.conv_layers = nn.Sequential(
+            nn.Conv2d(initial_channels + 2, 32, [4, 4], [2, 2]),  # +2 for edge channels
+            nn.LeakyReLU(),
+            nn.Conv2d(32, 32, [3, 3], [2, 2]),
+            nn.LeakyReLU(),
+            nn.Conv2d(32, 32, [3, 3], [1, 1]),
+            nn.LeakyReLU(),
         )
         
-        # Attention components (simplified)
-        self.query = nn.Linear(self.embed_size, self.head_size, bias=False)
-        self.key = nn.Linear(self.embed_size, self.head_size, bias=False) 
-        self.value = nn.Linear(self.embed_size, self.head_size, bias=False)
-        self.scale = self.head_size ** -0.5
-        
-        # Output projection 
-        self.out_proj = nn.Linear(self.head_size, self.embed_size, bias=False)
-        
-        # Final processing (like neurips)
+        # Simple dense layer
         self.dense = nn.Sequential(
             nn.Linear(self.final_flat, self.h_size),
-            nn.LeakyReLU()
+            nn.LeakyReLU(),
         )
     
-    def forward(self, visual_obs):
-        # Standard ONNX preparation
+    def conv_output_shape(self, input_shape, kernel_size, stride):
+        """Calculate output shape after convolution"""
+        h, w = input_shape
+        h_out = (h - kernel_size) // stride + 1
+        w_out = (w - kernel_size) // stride + 1
+        return (h_out, w_out)
+    
+    def forward(self, visual_obs: torch.Tensor) -> torch.Tensor:
         if not exporting_to_onnx.is_exporting():
             visual_obs = visual_obs.permute([0, 3, 1, 2])
         
-        # Patch extraction
-        patches = self.patch_embeddings(visual_obs)  # (B, embed_size, H', W')
+        # Simple edge detection (much faster than learnable)
+        edges_x = F.conv2d(visual_obs.mean(dim=1, keepdim=True), self.sobel_x, padding=1)
+        edges_y = F.conv2d(visual_obs.mean(dim=1, keepdim=True), self.sobel_y, padding=1)
+        edges = torch.sqrt(edges_x.pow(2) + edges_y.pow(2) + 1e-6)
         
-        # Flatten like neurips (single safe reshape)
-        hidden = patches.reshape([-1, self.final_flat])  # (B, embed_size * H' * W')
+        # Combine original and edge features
+        x = torch.cat([visual_obs, edges_x, edges_y], dim=1)
         
-        # MINIMAL ATTENTION: Work directly on flattened patches
-        B = hidden.shape[0]
-        
-        # Reshape to patches for attention (static dimensions only)
-        patches_2d = hidden.view(B, self.num_patches, self.embed_size)  # (B, N, E)
-        
-        # Compute attention (minimal operations)
-        Q = self.query(patches_2d)  # (B, N, head_size)
-        K = self.key(patches_2d)    # (B, N, head_size) 
-        V = self.value(patches_2d)  # (B, N, head_size)
-        
-        # Attention computation (simplified)
-        attn_scores = torch.matmul(Q, K.transpose(-2, -1)) * self.scale  # (B, N, N)
-        attn_weights = torch.softmax(attn_scores, dim=-1)  # (B, N, N)
-        attn_out = torch.matmul(attn_weights, V)  # (B, N, head_size)
-        
-        # Project back to embed_size
-        attn_proj = self.out_proj(attn_out)  # (B, N, embed_size)
-        
-        # Flatten back to original size (static dimensions)
-        attended_flat = attn_proj.view(B, self.final_flat)  # (B, embed_size * N)
-        
-        # Final processing
-        return self.dense(attended_flat)
+        # Simple forward pass
+        hidden = self.conv_layers(x)
+        hidden = hidden.reshape([-1, self.final_flat])
+        return self.dense(hidden)
+
