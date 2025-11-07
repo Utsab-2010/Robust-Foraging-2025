@@ -42,9 +42,11 @@ class NatureVisualEncoder(nn.Module):
         # self.register_buffer('roberts_2', F.pad(roberts_2.unsqueeze(0).unsqueeze(0), (0, 1, 0, 1)))
         # self.register_buffer('laplacian', laplacian.unsqueeze(0).unsqueeze(0))
         
-        # # Gaussian blur for noise reduction in foggy conditions
-        # gaussian = torch.tensor([[1, 2, 1], [2, 4, 2], [1, 2, 1]], dtype=torch.float32) / 16.0
-        # self.register_buffer('gaussian', gaussian.unsqueeze(0).unsqueeze(0))
+        # SIMPLE EDGE DETECTION: Add back a single Sobel filter (Barracuda-compatible)
+        # Using only one edge detector to test compatibility
+        sobel_x = torch.tensor([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]], dtype=torch.float32)
+        # Register as buffer - expand for all input channels
+        self.register_buffer('sobel_x', sobel_x.unsqueeze(0).unsqueeze(0).repeat(1, initial_channels, 1, 1))
         
         # Section-wise feature extraction with enhanced edge processing
         self.section_stem = nn.Sequential(
@@ -53,16 +55,16 @@ class NatureVisualEncoder(nn.Module):
             nn.LeakyReLU(0.1)
         )
         
-        # COMMENTED OUT: Edge feature processing - combines multiple edge detectors
-        # self.edge_combiner = nn.Sequential(
-        #     nn.Conv2d(7, 16, kernel_size=1),  # 7 edge channels -> 16 features
-        #     nn.BatchNorm2d(16),
-        #     nn.LeakyReLU(0.1)
-        # )
+        # SIMPLE EDGE COMBINER: Process single edge detection result
+        self.edge_combiner = nn.Sequential(
+            nn.Conv2d(1, 8, kernel_size=1),  # 1 edge channel -> 8 features
+            nn.BatchNorm2d(8),
+            nn.LeakyReLU(0.1)
+        )
         
-        # Main convolution pipeline for each section - adjusted for no edge features
+        # Main convolution pipeline - adjusted for edge features
         self.section_conv = nn.Sequential(
-            nn.Conv2d(24, 48, kernel_size=3, stride=2, padding=1),  # 24 features only (no edge features)
+            nn.Conv2d(24 + 8, 48, kernel_size=3, stride=2, padding=1),  # 24 features + 8 edge features
             nn.BatchNorm2d(48),
             nn.LeakyReLU(0.1),
             nn.Conv2d(48, 64, kernel_size=3, stride=2, padding=1),
@@ -70,63 +72,30 @@ class NatureVisualEncoder(nn.Module):
             nn.LeakyReLU(0.1)
         )
         
-        # Regular pooling for ONNX compatibility - not actually used, using F.adaptive_avg_pool2d instead
-        self.section_pool = nn.AvgPool2d(kernel_size=2, stride=2)  # Keep for compatibility
-        # Fixed features per section with 2x2 global pooling
-        self.features_per_section = 64  # 64 channels from global average pooling
+        # REMOVED: Complex sectioning and attention mechanisms for Barracuda compatibility
+        # Original script had dynamic loops, slicing, and attention that Barracuda can't handle
         
-        # Cross-section attention with section importance weighting - simplified for ONNX
-        self.section_attention = nn.Sequential(
-            nn.Linear(self.features_per_section * self.num_sections, 256),
-            nn.LeakyReLU(0.1),
-            nn.Linear(256, self.num_sections)
-            # Removed Dropout and Sigmoid for ONNX compatibility
-        )
-        
-        # Final projection with section importance consideration - simplified for ONNX
+        # SIMPLIFIED: Final projection for global pooled features (64 -> output_size)
         self.final_proj = nn.Sequential(
-            nn.Linear(self.features_per_section * self.num_sections, 512),
+            nn.Linear(64, 256),  # 64 features from global average pooling
             nn.LeakyReLU(0.1),
-            nn.Linear(512, 256),
+            nn.Linear(256, 128),
             nn.LeakyReLU(0.1),
-            nn.Linear(256, output_size)
-            # Removed Dropout for ONNX compatibility
+            nn.Linear(128, output_size)
+            # Removed complex attention and sectioning for Barracuda compatibility
         )
         
-    # COMMENTED OUT: def advanced_edge_detection(self, img):
-    #     """Multi-scale edge detection optimized for grey oval markers in foggy B&W"""
-    #     # Convert to grayscale if needed
-    #     if img.shape[1] > 1:
-    #         gray = img.mean(dim=1, keepdim=True)
-    #     else:
-    #         gray = img
-    #         
-    #     # Apply Gaussian blur first to reduce fog noise
-    #     denoised = F.conv2d(gray, self.gaussian, padding=1)
-    #     
-    #     # Apply multiple edge detectors
-    #     sobel_x_edges = F.conv2d(denoised, self.sobel_x, padding=1)
-    #     sobel_y_edges = F.conv2d(denoised, self.sobel_y, padding=1)
-    #     sobel_magnitude = torch.sqrt(sobel_x_edges.pow(2) + sobel_y_edges.pow(2) + 1e-6)
-    #     
-    #     prewitt_x_edges = F.conv2d(denoised, self.prewitt_x, padding=1)
-    #     prewitt_y_edges = F.conv2d(denoised, self.prewitt_y, padding=1)
-    #     prewitt_magnitude = torch.sqrt(prewitt_x_edges.pow(2) + prewitt_y_edges.pow(2) + 1e-6)
-    #     
-    #     roberts_1_edges = F.conv2d(denoised, self.roberts_1, padding=1)
-    #     roberts_2_edges = F.conv2d(denoised, self.roberts_2, padding=1)
-    #     roberts_magnitude = torch.sqrt(roberts_1_edges.pow(2) + roberts_2_edges.pow(2) + 1e-6)
-    #     
-    #     # Laplacian for detecting oval/circular shapes
-    #     laplacian_edges = torch.abs(F.conv2d(denoised, self.laplacian, padding=1))
-    #     
-    #     # Combine all edge features
-    #     edge_stack = torch.cat([
-    #         sobel_magnitude, prewitt_magnitude, roberts_magnitude, laplacian_edges,
-    #         sobel_x_edges, sobel_y_edges, denoised  # Include original for context
-    #     ], dim=1)
-    #     
-    #     return edge_stack
+   
+    def simple_edge_detection(self, img):
+        """Simple Sobel X edge detection - Barracuda compatible"""
+        # Apply single Sobel filter using F.conv2d
+        edges = F.conv2d(img, self.sobel_x, padding=1, groups=self.initial_channels)
+        # Take magnitude (absolute value) - more stable for ONNX than sqrt
+        edge_magnitude = torch.abs(edges)
+        # Reduce to single channel by averaging across input channels
+        if edge_magnitude.shape[1] > 1:
+            edge_magnitude = edge_magnitude.mean(dim=1, keepdim=True)
+        return edge_magnitude
     
     def extract_section_features(self, section_input):
         """Extract features from a single section - simplified without edge detection"""
@@ -143,59 +112,35 @@ class NatureVisualEncoder(nn.Module):
         # Process through main convolution pipeline (no edge features)
         conv_features = self.section_conv(regular_features)
         
-        # Use ONNX-compatible global pooling - replace adaptive pooling
+        # BARRACUDA-COMPATIBLE: Use tensor.mean() instead of adaptive pooling
+        # This performs global average pooling without ONNX export issues
         pooled = conv_features.mean(dim=[2, 3], keepdim=False)  # Global average pooling
         
-        # No need for reshape since we already have [batch, channels]
+        # No need for dynamic batch_size or reshape - pooled is already [batch, channels]
         return pooled  # Will be 64 features per section
     
     def forward(self, visual_obs: torch.Tensor) -> torch.Tensor:
-        # Always permute - remove dynamic ONNX check for compatibility
-        visual_obs = visual_obs.permute(0, 3, 1, 2)
+        # BARRACUDA-COMPATIBLE: Always permute, no conditional behavior
+        if not exporting_to_onnx.is_exporting():
+            visual_obs = visual_obs.permute(0, 3, 1, 2)
         
-        # Process each section - use fixed indexing for ONNX compatibility
-        section_0 = visual_obs[:, :, :, 0:self.section_width]
-        section_1 = visual_obs[:, :, :, self.section_width:2*self.section_width]  
-        section_2 = visual_obs[:, :, :, 2*self.section_width:3*self.section_width]
-        section_3 = visual_obs[:, :, :, 3*self.section_width:4*self.section_width]
-        section_4 = visual_obs[:, :, :, 4*self.section_width:]  # Last section gets remainder
+        # SIMPLE EDGE DETECTION: Add back single Sobel filter
+        edge_features = self.simple_edge_detection(visual_obs)
+        edge_processed = self.edge_combiner(edge_features)
         
-        # Extract features from each section
-        features_0 = self.extract_section_features(section_0)
-        features_1 = self.extract_section_features(section_1)
-        features_2 = self.extract_section_features(section_2)
-        features_3 = self.extract_section_features(section_3)
-        features_4 = self.extract_section_features(section_4)
+        # Regular feature extraction
+        regular_features = self.section_stem(visual_obs)
         
-        # Concatenate all section features - static operation for ONNX
-        all_features = torch.cat([features_0, features_1, features_2, features_3, features_4], dim=1)
+        # Combine regular and edge features (simple concatenation)
+        combined = torch.cat([regular_features, edge_processed], dim=1)  # 24 + 8 = 32 channels
         
-        # Generate attention weights for each section - apply softmax for normalization
-        attention_logits = self.section_attention(all_features)  # [batch, num_sections]
-        attention_weights = F.softmax(attention_logits, dim=1)
+        # Process through convolution pipeline
+        conv_features = self.section_conv(combined)
         
-        # Apply section importance weighting (emphasize sides) - ONNX compatible
-        importance_weights = self.section_importance.unsqueeze(0)  # [1, num_sections]
-        combined_weights = attention_weights * importance_weights
+        # Global average pooling - Barracuda friendly
+        pooled = conv_features.mean(dim=[2, 3], keepdim=False)  # [batch, 64]
         
-        # Normalize weights for ONNX compatibility
-        weight_sum = combined_weights.sum(dim=1, keepdim=True)
-        combined_weights = combined_weights / (weight_sum + 1e-8)
-        
-        # Apply weighted attention to each section
-        weighted_features = []
-        for i in range(self.num_sections):
-            start_idx = i * self.features_per_section
-            end_idx = (i + 1) * self.features_per_section
-            section_feat = all_features[:, start_idx:end_idx]
-            weight = combined_weights[:, i:i+1]  # [batch, 1]
-            weighted_feat = section_feat * weight
-            weighted_features.append(weighted_feat)
-        
-        # Combine weighted features
-        final_features = torch.cat(weighted_features, dim=1)
-        
-        # Final projection to output
-        output = self.final_proj(final_features)
+        # Simple projection to output size
+        output = self.final_proj(pooled)
         
         return output

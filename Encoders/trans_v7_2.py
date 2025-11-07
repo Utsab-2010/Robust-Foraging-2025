@@ -1,8 +1,3 @@
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from mlagents.torch_utils.globals import exporting_to_onnx
-
 class NatureVisualEncoder(nn.Module):
     def __init__(self, height: int, width: int, initial_channels: int, output_size: int):
         super().__init__()
@@ -11,73 +6,122 @@ class NatureVisualEncoder(nn.Module):
         self.num_sections = 5
         self.section_width = width // self.num_sections
         
-        # Main feature extraction pipeline - processes full image first
-        self.main_conv = nn.Sequential(
-            nn.Conv2d(initial_channels, 32, kernel_size=3, stride=1, padding=1),
-            nn.LeakyReLU(),
-            nn.Conv2d(32, 48, kernel_size=3, stride=2, padding=1),  # Down to 78x44
-            nn.LeakyReLU(),
-            nn.Conv2d(48, 64, kernel_size=3, stride=2, padding=1),  # Down to 39x22
+        # Edge detection parameters - use fixed filters for ONNX stability
+        sobel_x = torch.tensor([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]], dtype=torch.float32).unsqueeze(0).unsqueeze(0)
+        sobel_y = torch.tensor([[-1, -2, -1], [0, 0, 0], [1, 2, 1]], dtype=torch.float32).unsqueeze(0).unsqueeze(0)
+        # Use register_buffer instead of Parameter for fixed filters (no gradients)
+        self.register_buffer('sobel_x', sobel_x.repeat(4, initial_channels, 1, 1))
+        self.register_buffer('sobel_y', sobel_y.repeat(4, initial_channels, 1, 1))
+        
+        # Section-wise feature extraction - smaller network per section
+        self.section_stem = nn.Sequential(
+            nn.Conv2d(initial_channels, 16, kernel_size=3, stride=1, padding=1),
+            nn.GroupNorm(4, 16),
             nn.LeakyReLU()
         )
         
-        # Edge detection on full image - more effective than per-section
-        sobel_x = torch.tensor([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]], dtype=torch.float32).unsqueeze(0).unsqueeze(0)
-        sobel_y = torch.tensor([[-1, -2, -1], [0, 0, 0], [1, 2, 1]], dtype=torch.float32).unsqueeze(0).unsqueeze(0)
-        self.register_buffer('sobel_x', sobel_x)
-        self.register_buffer('sobel_y', sobel_y)
-        
-        # Sectional attention - learns to focus on important regions
-        self.spatial_attention = nn.Sequential(
-            nn.Conv2d(64, 32, kernel_size=1),  # Channel reduction
+        # Compact convolutional pipeline for each section
+        self.section_conv = nn.Sequential(
+            nn.Conv2d(16 + 4, 24, kernel_size=3, stride=2, padding=1),  # 16 features + 4 edge features
+            nn.GroupNorm(4, 24),
             nn.LeakyReLU(),
-            nn.Conv2d(32, self.num_sections, kernel_size=1),  # One channel per section
-            nn.Softmax(dim=1)  # Attention weights across sections
+            nn.Conv2d(24, 32, kernel_size=3, stride=2, padding=1),
+            nn.GroupNorm(4, 32),
+            nn.LeakyReLU()
         )
         
-        # Global feature extraction after attention
-        self.final_conv = nn.Sequential(
-            nn.Conv2d(64, 64, kernel_size=3, stride=2, padding=1),  # Down to ~20x11
+        # Calculate approximate output size per section after convolutions
+        # For 156x88 input: section width ≈ 31, after 2 stride-2 convs ≈ 8x22
+        section_height_after_conv = height // 4  # Approximate after 2 stride-2 convs
+        section_width_after_conv = self.section_width // 4
+        
+        # Global pooling for each section - use global pooling for ONNX stability
+        self.features_per_section = 32  # Just 32 features per section with global pooling
+        
+        # print(f"Section width: {self.section_width}")
+        # print(f"Features per section: {self.features_per_section}")
+        # print(f"Total features: {self.features_per_section * self.num_sections}")
+        
+        # Cross-section attention to focus on relevant sections
+        self.section_attention = nn.Sequential(
+            nn.Linear(self.features_per_section * self.num_sections, 128),
             nn.LeakyReLU(),
-            nn.AdaptiveAvgPool2d((4, 4))  # Fixed spatial size
+            nn.Linear(128, self.num_sections),
+            nn.Softmax(dim=1)
         )
         
-        # Final projection
+        # Final projection combining all sections
         self.final_proj = nn.Sequential(
-            nn.Flatten(),
-            nn.Linear(64 * 16, 256),
+            nn.Linear(self.features_per_section * self.num_sections, 256),
             nn.LeakyReLU(),
             nn.Linear(256, output_size)
         )
         
+    def extract_section_features(self, section_input):
+        """Extract features from a single section with edge detection"""
+        # Initial feature extraction for this section
+        x = self.section_stem(section_input)
+        
+        # Edge detection for this section
+        edges_x = F.conv2d(section_input, self.sobel_x, padding=1, groups=self.initial_channels)
+        edges_y = F.conv2d(section_input, self.sobel_y, padding=1, groups=self.initial_channels)
+        edges = torch.sqrt(edges_x.pow(2) + edges_y.pow(2) + 1e-6)
+        
+        # Combine features and edges
+        combined = torch.cat([x, edges], dim=1)
+        
+        # Process through convolutions
+        features = self.section_conv(combined)
+        
+        # Pool to fixed size - use global average pooling for consistency
+        pooled = F.adaptive_avg_pool2d(features, (1, 1))  # Global pooling
+        # Use reshape for flattening
+        batch_size = pooled.shape[0]
+        flattened = pooled.reshape(batch_size, -1)
+        return flattened
+    
     def forward(self, visual_obs: torch.Tensor) -> torch.Tensor:
         if not exporting_to_onnx.is_exporting():
             visual_obs = visual_obs.permute([0, 3, 1, 2])
         
-        # Extract main features from full image
-        features = self.main_conv(visual_obs)  # [B, 64, 39, 22]
+        batch_size = visual_obs.shape[0]
         
-        # Apply edge detection on original image
-        gray_img = visual_obs.mean(dim=1, keepdim=True)  # Convert to grayscale
-        edges_x = F.conv2d(gray_img, self.sobel_x, padding=1)
-        edges_y = F.conv2d(gray_img, self.sobel_y, padding=1)
-        edge_magnitude = torch.sqrt(edges_x.pow(2) + edges_y.pow(2) + 1e-6)
+        # Pre-calculate section indices for ONNX compatibility
+        section_features = []
         
-        # Resize edge map to match feature size
-        edge_features = F.interpolate(edge_magnitude, size=features.shape[2:], mode='bilinear', align_corners=False)
+        # Process each section with fixed indices
+        for i in range(5):  # Fixed number instead of self.num_sections
+            start_idx = i * self.section_width
+            if i == 4:  # Last section
+                section = visual_obs[:, :, :, start_idx:]
+            else:
+                end_idx = (i + 1) * self.section_width
+                section = visual_obs[:, :, :, start_idx:end_idx]
+            
+            features = self.extract_section_features(section)
+            section_features.append(features)
         
-        # Combine features with edge information
-        enhanced_features = features + 0.3 * edge_features  # Weighted edge enhancement
+        # Stack instead of cat for better ONNX support
+        all_features = torch.cat(section_features, dim=1)
         
-        # Generate spatial attention map
-        attention_map = self.spatial_attention(enhanced_features)  # [B, 5, H, W]
+        # Apply cross-section attention
+        attention_weights = self.section_attention(all_features)
         
-        # Apply sectional attention - weight features by attention map
-        weighted_features = enhanced_features.unsqueeze(1) * attention_map.unsqueeze(2)  # Broadcast and multiply
-        attended_features = weighted_features.sum(dim=1)  # Sum across sections
+        # Apply attention weights to each section - ONNX compatible approach
+        weighted_section_features = []
+        for i in range(5):  # Fixed range
+            start_idx = i * self.features_per_section
+            end_idx = (i + 1) * self.features_per_section
+            section_feat = all_features[:, start_idx:end_idx]
+            weight = attention_weights[:, i:i+1]
+            # Use broadcasting for ONNX compatibility
+            weighted_feat = section_feat * weight
+            weighted_section_features.append(weighted_feat)
         
-        # Final processing
-        final_features = self.final_conv(attended_features)
-        output = self.final_proj(final_features)
+        # Concatenate weighted features instead of using index assignment
+        weighted_features = torch.cat(weighted_section_features, dim=1)
+        
+        # Final projection
+        output = self.final_proj(weighted_features)
         
         return output
