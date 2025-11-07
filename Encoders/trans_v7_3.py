@@ -42,11 +42,26 @@ class NatureVisualEncoder(nn.Module):
         # self.register_buffer('roberts_2', F.pad(roberts_2.unsqueeze(0).unsqueeze(0), (0, 1, 0, 1)))
         # self.register_buffer('laplacian', laplacian.unsqueeze(0).unsqueeze(0))
         
-        # SIMPLE EDGE DETECTION: Add back a single Sobel filter (Barracuda-compatible)
-        # Using only one edge detector to test compatibility
+        # MULTIPLE EDGE DETECTION: Add back multiple filters (Barracuda-compatible)
+        # Classic Sobel filters
         sobel_x = torch.tensor([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]], dtype=torch.float32)
-        # Register as buffer - expand for all input channels
+        sobel_y = torch.tensor([[-1, -2, -1], [0, 0, 0], [1, 2, 1]], dtype=torch.float32)
+        
+        # Prewitt filters - better for gradual transitions
+        prewitt_x = torch.tensor([[-1, 0, 1], [-1, 0, 1], [-1, 0, 1]], dtype=torch.float32)
+        prewitt_y = torch.tensor([[-1, -1, -1], [0, 0, 0], [1, 1, 1]], dtype=torch.float32)
+        
+        # Roberts cross-gradient - good for sharp edges (pad to 3x3 for consistency)
+        roberts_1 = torch.tensor([[1, 0, 0], [0, -1, 0], [0, 0, 0]], dtype=torch.float32)
+        roberts_2 = torch.tensor([[0, 1, 0], [-1, 0, 0], [0, 0, 0]], dtype=torch.float32)
+        
+        # Register all as buffers - expand for all input channels
         self.register_buffer('sobel_x', sobel_x.unsqueeze(0).unsqueeze(0).repeat(1, initial_channels, 1, 1))
+        self.register_buffer('sobel_y', sobel_y.unsqueeze(0).unsqueeze(0).repeat(1, initial_channels, 1, 1))
+        self.register_buffer('prewitt_x', prewitt_x.unsqueeze(0).unsqueeze(0).repeat(1, initial_channels, 1, 1))
+        self.register_buffer('prewitt_y', prewitt_y.unsqueeze(0).unsqueeze(0).repeat(1, initial_channels, 1, 1))
+        self.register_buffer('roberts_1', roberts_1.unsqueeze(0).unsqueeze(0).repeat(1, initial_channels, 1, 1))
+        self.register_buffer('roberts_2', roberts_2.unsqueeze(0).unsqueeze(0).repeat(1, initial_channels, 1, 1))
         
         # Section-wise feature extraction with enhanced edge processing
         self.section_stem = nn.Sequential(
@@ -55,16 +70,16 @@ class NatureVisualEncoder(nn.Module):
             nn.LeakyReLU(0.1)
         )
         
-        # SIMPLE EDGE COMBINER: Process single edge detection result
+        # MULTI-EDGE COMBINER: Process multiple edge detection results
         self.edge_combiner = nn.Sequential(
-            nn.Conv2d(1, 8, kernel_size=1),  # 1 edge channel -> 8 features
-            nn.BatchNorm2d(8),
+            nn.Conv2d(6, 16, kernel_size=1),  # 6 edge channels -> 16 features
+            nn.BatchNorm2d(16),
             nn.LeakyReLU(0.1)
         )
         
-        # Main convolution pipeline - adjusted for edge features
+        # Main convolution pipeline - adjusted for multiple edge features
         self.section_conv = nn.Sequential(
-            nn.Conv2d(24 + 8, 48, kernel_size=3, stride=2, padding=1),  # 24 features + 8 edge features
+            nn.Conv2d(24 + 16, 48, kernel_size=3, stride=2, padding=1),  # 24 features + 16 edge features = 40
             nn.BatchNorm2d(48),
             nn.LeakyReLU(0.1),
             nn.Conv2d(48, 64, kernel_size=3, stride=2, padding=1),
@@ -86,16 +101,38 @@ class NatureVisualEncoder(nn.Module):
         )
         
    
-    def simple_edge_detection(self, img):
-        """Simple Sobel X edge detection - Barracuda compatible"""
-        # Apply single Sobel filter using F.conv2d
-        edges = F.conv2d(img, self.sobel_x, padding=1, groups=self.initial_channels)
-        # Take magnitude (absolute value) - more stable for ONNX than sqrt
-        edge_magnitude = torch.abs(edges)
-        # Reduce to single channel by averaging across input channels
-        if edge_magnitude.shape[1] > 1:
-            edge_magnitude = edge_magnitude.mean(dim=1, keepdim=True)
-        return edge_magnitude
+    def multi_edge_detection(self, img):
+        """Multi-filter edge detection - Barracuda compatible"""
+        # Apply all 6 edge filters using F.conv2d
+        sobel_x_edges = F.conv2d(img, self.sobel_x, padding=1, groups=self.initial_channels)
+        sobel_y_edges = F.conv2d(img, self.sobel_y, padding=1, groups=self.initial_channels)
+        prewitt_x_edges = F.conv2d(img, self.prewitt_x, padding=1, groups=self.initial_channels)
+        prewitt_y_edges = F.conv2d(img, self.prewitt_y, padding=1, groups=self.initial_channels)
+        roberts_1_edges = F.conv2d(img, self.roberts_1, padding=1, groups=self.initial_channels)
+        roberts_2_edges = F.conv2d(img, self.roberts_2, padding=1, groups=self.initial_channels)
+        
+        # Take magnitude (absolute value) for each filter - more stable for ONNX than sqrt
+        edge_list = [
+            torch.abs(sobel_x_edges),
+            torch.abs(sobel_y_edges), 
+            torch.abs(prewitt_x_edges),
+            torch.abs(prewitt_y_edges),
+            torch.abs(roberts_1_edges),
+            torch.abs(roberts_2_edges)
+        ]
+        
+        # Average across input channels for each filter, then stack
+        edge_channels = []
+        for edges in edge_list:
+            if edges.shape[1] > 1:
+                edge_channel = edges.mean(dim=1, keepdim=True)
+            else:
+                edge_channel = edges
+            edge_channels.append(edge_channel)
+        
+        # Concatenate all edge channels: [batch, 6, height, width]
+        multi_edges = torch.cat(edge_channels, dim=1)
+        return multi_edges
     
     def extract_section_features(self, section_input):
         """Extract features from a single section - simplified without edge detection"""
@@ -124,15 +161,15 @@ class NatureVisualEncoder(nn.Module):
         if not exporting_to_onnx.is_exporting():
             visual_obs = visual_obs.permute(0, 3, 1, 2)
         
-        # SIMPLE EDGE DETECTION: Add back single Sobel filter
-        edge_features = self.simple_edge_detection(visual_obs)
+        # MULTI-EDGE DETECTION: Apply all 6 filters  
+        edge_features = self.multi_edge_detection(visual_obs)
         edge_processed = self.edge_combiner(edge_features)
         
         # Regular feature extraction
         regular_features = self.section_stem(visual_obs)
         
         # Combine regular and edge features (simple concatenation)
-        combined = torch.cat([regular_features, edge_processed], dim=1)  # 24 + 8 = 32 channels
+        combined = torch.cat([regular_features, edge_processed], dim=1)  # 24 + 16 = 40 channels
         
         # Process through convolution pipeline
         conv_features = self.section_conv(combined)
