@@ -1,5 +1,3 @@
-import cv2
-
 class NatureVisualEncoder(nn.Module):
     def __init__(self, height: int, width: int, initial_channels: int, output_size: int):
         super().__init__()
@@ -17,23 +15,26 @@ class NatureVisualEncoder(nn.Module):
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
         self.morph_kernel_size = kernel.shape
         
-        # TRAINABLE WEIGHTING LAYER
-        # This learns to weight 4 different processing paths based on input content
-        # Input: original + contrast + sobel_y + morphological_closing = 4 channels
+        # SIMPLIFIED TRAINABLE WEIGHTING LAYER
+        # Takes raw input image and directly computes 4 weights for processing paths
+        # Much simpler: just look at input to decide weighting strategy
         self.adaptive_weighter = nn.Sequential(
-            # Reduce spatial dimensions using regular pooling (Barracuda compatible)
-            # Input: 86x155 -> 21x38 (stride 4) -> 10x19 (stride 2) -> 5x9 (stride 2)
-            nn.Conv2d(4, 16, kernel_size=4, stride=4, padding=1),  # 86x155 -> ~21x38
-            nn.BatchNorm2d(16),
-            nn.LeakyReLU(0.1),
-            nn.Conv2d(16, 8, kernel_size=3, stride=2, padding=1),   # ~21x38 -> ~10x19
+            # For small 86x155 image, directly process to get global weights
+            nn.Conv2d(initial_channels, 8, kernel_size=5, stride=4, padding=2),  # ~86x155 -> ~22x39
             nn.BatchNorm2d(8),
             nn.LeakyReLU(0.1),
-            nn.Conv2d(8, 4, kernel_size=3, stride=2, padding=1),    # ~10x19 -> ~5x9
+            nn.Conv2d(8, 4, kernel_size=3, stride=2, padding=1),   # ~22x39 -> ~11x20
             nn.BatchNorm2d(4),
             nn.LeakyReLU(0.1),
-            # Global average pooling using tensor.mean() (Barracuda compatible)
-            # Will be applied in forward() as: tensor.mean(dim=[2, 3])
+            # Global average pooling + small MLP to get 4 weights
+            # Pool to single values, then predict weights
+        )
+        
+        # Small MLP to convert pooled features to weights
+        self.weight_predictor = nn.Sequential(
+            nn.Linear(4, 8),
+            nn.LeakyReLU(0.1),
+            nn.Linear(8, 4)  # Output 4 weights (will be softmaxed)
         )
         
         # MAIN FEATURE EXTRACTION (from trans_v7_3)
@@ -55,11 +56,11 @@ class NatureVisualEncoder(nn.Module):
         
         # FINAL PROJECTION (from trans_v7_3)
         self.final_proj = nn.Sequential(
-            nn.Linear(64, 256),
-            nn.LeakyReLU(0.1),
-            nn.Linear(256, 128),
-            nn.LeakyReLU(0.1),
-            nn.Linear(128, output_size)
+            nn.Linear(64, 128),
+            nn.Tanh(),
+            nn.Linear(128, 256),
+            nn.Tanh(),
+            nn.Linear(256, output_size)
         )
     
     def adjust_contrast(self, image, contrast=1.5):
@@ -100,11 +101,19 @@ class NatureVisualEncoder(nn.Module):
         if not exporting_to_onnx.is_exporting():
             visual_obs = visual_obs.permute(0, 3, 1, 2)
         
+        # SIMPLIFIED WEIGHTING: Use raw input to predict weights
+        # Extract features from raw input for weight prediction
+        weight_features = self.adaptive_weighter(visual_obs)  # [batch, 4, H', W']
+        pooled_features = weight_features.mean(dim=[2, 3])    # [batch, 4] - global avg pool
+        raw_weights = self.weight_predictor(pooled_features)  # [batch, 4] - predict weights
+        weights = F.softmax(raw_weights, dim=1)               # [batch, 4] - normalize to sum=1
+        weights = weights.unsqueeze(-1).unsqueeze(-1)         # [batch, 4, 1, 1] - for broadcasting
+        
         # PROCESSING PIPELINE: Create 4 different representations
         
         
         # 2. Contrast-enhanced image
-        contrast_enhanced = self.adjust_contrast(visual_obs, contrast=1.5)
+        contrast_enhanced = self.adjust_contrast(visual_obs, contrast=5)
         
         # 3. Sobel Y edge detection
         sobel_edges = self.apply_sobel_y(visual_obs)
@@ -112,20 +121,8 @@ class NatureVisualEncoder(nn.Module):
         # 4. Morphological closing on Sobel edges
         morph_closed = self.morphological_closing(sobel_edges)
         
-        # ADAPTIVE WEIGHTING: Stack all 4 channels for weight calculation
-        stacked_features = torch.cat([visual_obs, contrast_enhanced, sobel_edges, morph_closed], dim=1)
-        
-        # Learn adaptive weights based on input content
-        weight_features = self.adaptive_weighter(stacked_features)  # Shape: [batch, 4, H', W']
-        
-        # Global average pooling to get weights (Barracuda compatible)
-        weights = weight_features.mean(dim=[2, 3])  # Shape: [batch, 4]
-        
-        # Apply softmax to ensure weights sum to 1
-        weights = F.softmax(weights, dim=1)
-        weights = weights.unsqueeze(-1).unsqueeze(-1)  # Shape: [batch, 4, 1, 1] for broadcasting
-        
-        # Apply learned weights to each channel
+        # Stack and apply learned weights
+        stacked_features = torch.cat([original, contrast_enhanced, sobel_edges, morph_closed], dim=1)
         weighted_features = stacked_features * weights
         
         # MAIN FEATURE EXTRACTION
