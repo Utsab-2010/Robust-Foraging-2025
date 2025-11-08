@@ -93,9 +93,9 @@ class NatureVisualEncoder(nn.Module):
         # SIMPLIFIED: Final projection for global pooled features (64 -> output_size)
         self.final_proj = nn.Sequential(
             nn.Linear(64, 256),  # 64 features from global average pooling
-            nn.LeakyReLU(0.1),
+            nn.Tanh(),
             nn.Linear(256, 128),
-            nn.LeakyReLU(0.1),
+            nn.Tanh(),
             nn.Linear(128, output_size)
             # Removed complex attention and sectioning for Barracuda compatibility
         )
